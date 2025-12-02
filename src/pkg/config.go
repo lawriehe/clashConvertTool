@@ -15,15 +15,12 @@ var (
 	Global *Config
 )
 
-func Init(configPath string) (*Config, error) {
-	if configPath == "" {
-		configPath = "configs"
-	}
+func Init() (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
-	viper.AddConfigPath(configPath)
 	viper.AddConfigPath(".")
 	viper.AddConfigPath("./configs")
+
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			log.Printf("Config file not found, using defaults and environment variables")
@@ -31,17 +28,13 @@ func Init(configPath string) (*Config, error) {
 			return nil, fmt.Errorf("failed to read config file: %v", err)
 		}
 	}
-	// 设置默认值
-	setDefaults()
 
+	var config Config
 	// 解析配置到结构体
-	if err := viper.Unmarshal(&Global); err != nil {
+	if err := viper.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %v", err)
 	}
+	Global = &config
 
 	return Global, nil
-}
-
-func setDefaults() {
-	viper.SetDefault("url", "unknow")
 }

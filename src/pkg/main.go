@@ -66,7 +66,7 @@ type ProxyGroup struct {
 }
 
 func main() {
-	cfg, err := Init("configs")
+	cfg, err := Init()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 		return
