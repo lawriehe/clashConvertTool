@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -45,17 +46,27 @@ type ClashProxy struct {
 	SkipCert bool                   `yaml:"skip-cert-verify"`
 }
 
+// RulesProvider defines the structure for rule providers
+type RulesProvider struct {
+	Type     string `yaml:"type"`
+	Behavior string `yaml:"behavior"`
+	URL      string `yaml:"url"`
+	Path     string `yaml:"path"`
+	Interval int    `yaml:"interval"`
+}
+
 // ClashConfig 代表完整的 Clash 配置文件结构
 type ClashConfig struct {
-	Port         int          `yaml:"port"`
-	SocksPort    int          `yaml:"socks-port"`
-	AllowLan     bool         `yaml:"allow-lan"`
-	Mode         string       `yaml:"mode"`
-	LogLevel     string       `yaml:"log-level"`
-	ExternalCtrl string       `yaml:"external-controller"`
-	Proxies      []ClashProxy `yaml:"proxies"`
-	ProxyGroups  []ProxyGroup `yaml:"proxy-groups"`
-	Rules        []string     `yaml:"rules"`
+	Port           int                      `yaml:"port"`
+	SocksPort      int                      `yaml:"socks-port"`
+	AllowLan       bool                     `yaml:"allow-lan"`
+	Mode           string                   `yaml:"mode"`
+	LogLevel       string                   `yaml:"log-level"`
+	ExternalCtrl   string                   `yaml:"external-controller"`
+	Proxies        []ClashProxy             `yaml:"proxies"`
+	ProxyGroups    []ProxyGroup             `yaml:"proxy-groups"`
+	RulesProviders map[string]RulesProvider `yaml:"rule-providers"`
+	Rules          []string                 `yaml:"rules"`
 }
 
 // ProxyGroup 代表 Clash 配置中的代理组
@@ -224,26 +235,84 @@ func convertVmessToClashProxy(node VmessNode) (ClashProxy, error) {
 
 // createDefaultClashConfig 创建一个默认的 Clash 配置框架
 func createDefaultClashConfig(proxies []ClashProxy, proxyNames []string) ClashConfig {
-	return ClashConfig{
-		Port:         7890,
-		SocksPort:    7891,
-		AllowLan:     true,
-		Mode:         "Rule",
-		LogLevel:     "info",
-		ExternalCtrl: "127.0.0.1:9090",
-		Proxies:      proxies,
-		ProxyGroups: []ProxyGroup{
-			{
-				Name:    "PROXY",
-				Type:    "select",
-				Proxies: append([]string{"DIRECT", "REJECT"}, proxyNames...),
+	// Read template file
+	f, err := os.ReadFile("resources/out-template.yaml")
+	if err != nil {
+		log.Printf("Error reading template file: %v, using hardcoded defaults", err)
+		// Fallback to hardcoded defaults if template fails
+		return ClashConfig{
+			Port:         7890,
+			SocksPort:    7891,
+			AllowLan:     true,
+			Mode:         "Rule",
+			LogLevel:     "info",
+			ExternalCtrl: "127.0.0.1:9090",
+			Proxies:      proxies,
+			ProxyGroups: []ProxyGroup{
+				{
+					Name:    "PROXY",
+					Type:    "select",
+					Proxies: append([]string{"DIRECT", "REJECT"}, proxyNames...),
+				},
 			},
-		},
-		Rules: []string{
-			"DOMAIN-SUFFIX,google.com,PROXY",
-			"DOMAIN-SUFFIX,github.com,PROXY",
-			"DOMAIN-KEYWORD,telegram,PROXY",
-			"MATCH,DIRECT",
-		},
+			Rules: []string{
+				"MATCH,DIRECT",
+			},
+		}
+	}
+
+	// Temporary struct for parsing template
+	type TemplateConfig struct {
+		Port          int                      `yaml:"port"`
+		SocksPort     int                      `yaml:"socks-port"`
+		AllowLan      bool                     `yaml:"allow-lan"`
+		Mode          string                   `yaml:"mode"`
+		LogLevel      string                   `yaml:"log-level"`
+		ExternalCtrl  string                   `yaml:"external-controller"`
+		RuleProviders map[string]RulesProvider `yaml:"rule-providers"`
+		Rules         []string                 `yaml:"rules"`
+		ProxyGroups   []map[string]interface{} `yaml:"proxy-groups"`
+	}
+
+	var tmpl TemplateConfig
+	if err := yaml.Unmarshal(f, &tmpl); err != nil {
+		log.Fatalf("Error parsing template: %v", err)
+	}
+
+	var proxyGroups []ProxyGroup
+	for _, g := range tmpl.ProxyGroups {
+		name, _ := g["name"].(string)
+		typ, _ := g["type"].(string)
+
+		var groupProxies []string
+		// Check proxies field
+		if p, ok := g["proxies"].(string); ok && p == "${proxies}" {
+			groupProxies = append(groupProxies, proxyNames...)
+		} else if pList, ok := g["proxies"].([]interface{}); ok {
+			for _, pItem := range pList {
+				if s, ok := pItem.(string); ok {
+					groupProxies = append(groupProxies, s)
+				}
+			}
+		}
+
+		proxyGroups = append(proxyGroups, ProxyGroup{
+			Name:    name,
+			Type:    typ,
+			Proxies: groupProxies,
+		})
+	}
+
+	return ClashConfig{
+		Port:           tmpl.Port,
+		SocksPort:      tmpl.SocksPort,
+		AllowLan:       tmpl.AllowLan,
+		Mode:           tmpl.Mode,
+		LogLevel:       tmpl.LogLevel,
+		ExternalCtrl:   tmpl.ExternalCtrl,
+		Proxies:        proxies,
+		ProxyGroups:    proxyGroups,
+		RulesProviders: tmpl.RuleProviders,
+		Rules:          tmpl.Rules,
 	}
 }
